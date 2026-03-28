@@ -119,6 +119,24 @@ def handle_write(body: dict[str, Any]) -> dict[str, Any]:
     return api_response(200, {"ok": True})
 
 
+def _query_all_for_smoke(smoke_id: str) -> list[dict[str, Any]]:
+    """All items for smoke_id, oldest first (sort key ascending). Paginates."""
+    table = _table()
+    rows: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {
+        "KeyConditionExpression": Key("smoke_id").eq(smoke_id),
+        "ScanIndexForward": True,
+    }
+    while True:
+        resp = table.query(**kwargs)
+        rows.extend(resp.get("Items") or [])
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return rows
+
+
 def handle_read(body: dict[str, Any]) -> dict[str, Any]:
     if "smoke_id" not in body:
         logger.warning("read rejected: missing smoke_id")
@@ -126,11 +144,7 @@ def handle_read(body: dict[str, Any]) -> dict[str, Any]:
 
     smoke_id = str(body["smoke_id"])
     try:
-        resp = _table().query(
-            KeyConditionExpression=Key("smoke_id").eq(smoke_id),
-            ScanIndexForward=False,
-            Limit=1,
-        )
+        items = _query_all_for_smoke(smoke_id)
     except ClientError as exc:
         err = exc.response.get("Error", {})
         logger.exception("DynamoDB query failed smoke_id=%s", smoke_id)
@@ -142,18 +156,21 @@ def handle_read(body: dict[str, Any]) -> dict[str, Any]:
             },
         )
 
-    items = resp.get("Items") or []
-    if not items:
-        logger.info("read miss smoke_id=%s", smoke_id)
-        return api_response(404, {"error": "No readings for smoke_id", "smoke_id": smoke_id})
-
-    reading = _item_to_json(items[0])
+    history = [_item_to_json(i) for i in items]
+    current = history[-1] if history else None
     logger.info(
-        "read hit smoke_id=%s timestamp=%s",
-        reading["smoke_id"],
-        reading["timestamp"],
+        "read smoke_id=%s count=%s current_ts=%s",
+        smoke_id,
+        len(history),
+        current["timestamp"] if current else None,
     )
-    return api_response(200, {"reading": reading})
+    return api_response(
+        200,
+        {
+            "current": current,
+            "history": history,
+        },
+    )
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:

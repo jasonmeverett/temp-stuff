@@ -1,9 +1,7 @@
-import { useCallback, useState } from "react";
-import {
-  readEndpointUrl,
-  telemetryApiBaseUrl,
-  writeEndpointUrl,
-} from "./endpoints.js";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { readEndpointUrl } from "./endpoints.js";
+
+const Plot = lazy(() => import("react-plotly.js"));
 
 function parseBody(res, text) {
   try {
@@ -13,19 +11,36 @@ function parseBody(res, text) {
   }
 }
 
+/** Supports new { current, history } and legacy { reading }. */
+function normalizeReadPayload(data) {
+  if (data.current !== undefined || data.history !== undefined) {
+    return {
+      current: data.current ?? null,
+      history: Array.isArray(data.history) ? data.history : [],
+    };
+  }
+  if (data.reading) {
+    const r = data.reading;
+    return { current: r, history: [r] };
+  }
+  return { current: null, history: [] };
+}
+
 export default function App() {
   const [smokeId, setSmokeId] = useState("smoke-01");
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
+  const [payload, setPayload] = useState({ current: null, history: [] });
   const [err, setErr] = useState(null);
 
-  const loadLatest = useCallback(async () => {
-    setErr(null);
-    setResult(null);
+  const fetchRead = useCallback(async () => {
+    const id = smokeId.trim();
+    if (!id) return;
+
     setLoading(true);
+    setErr(null);
     try {
       const url = new URL(readEndpointUrl);
-      url.searchParams.set("smoke_id", smokeId.trim() || "smoke-01");
+      url.searchParams.set("smoke_id", id);
       const res = await fetch(url.toString());
       const text = await res.text();
       const data = parseBody(res, text);
@@ -33,7 +48,7 @@ export default function App() {
         setErr((data.error ?? data.detail ?? text) || `HTTP ${res.status}`);
         return;
       }
-      setResult(data.reading ?? data);
+      setPayload(normalizeReadPayload(data));
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -41,28 +56,64 @@ export default function App() {
     }
   }, [smokeId]);
 
+  useEffect(() => {
+    if (!smokeId.trim()) {
+      setPayload({ current: null, history: [] });
+      setErr(null);
+      return;
+    }
+    fetchRead();
+    const timer = setInterval(fetchRead, 10_000);
+    return () => clearInterval(timer);
+  }, [smokeId, fetchRead]);
+
+  const plotData = useMemo(() => {
+    const h = payload.history;
+    if (!h.length) {
+      return { data: [], layout: {} };
+    }
+    const x = h.map((r) => r.timestamp);
+    const internal = h.map((r) => r.internal);
+    const ambient = h.map((r) => r.ambient);
+    return {
+      data: [
+        {
+          x,
+          y: internal,
+          name: "Internal",
+          type: "scatter",
+          mode: "lines+markers",
+          line: { color: "#0f766e" },
+          marker: { size: 6 },
+        },
+        {
+          x,
+          y: ambient,
+          name: "Ambient",
+          type: "scatter",
+          mode: "lines+markers",
+          line: { color: "#b45309" },
+          marker: { size: 6 },
+        },
+      ],
+      layout: {
+        autosize: true,
+        title: { text: "History" },
+        margin: { l: 52, r: 16, t: 48, b: 72 },
+        xaxis: { title: "Time" },
+        yaxis: { title: "Temperature" },
+        legend: { orientation: "h", y: 1.12 },
+        paper_bgcolor: "#f8fafc",
+        plot_bgcolor: "#fff",
+      },
+    };
+  }, [payload.history]);
+
+  const cur = payload.current;
+
   return (
     <div className="wrap">
-      <h1>Latest temperature</h1>
-      <p className="hint">
-        Data comes from your telemetry API (reads the most recent row for this{" "}
-        <code>smoke_id</code>).
-      </p>
-
-      <dl className="endpoints">
-        <dt>API base</dt>
-        <dd>
-          <code>{telemetryApiBaseUrl}</code>
-        </dd>
-        <dt>Read</dt>
-        <dd>
-          <code>{readEndpointUrl}</code>
-        </dd>
-        <dt>Write</dt>
-        <dd>
-          <code>{writeEndpointUrl}</code> <span className="muted">(notify.py)</span>
-        </dd>
-      </dl>
+      <h1>Smoke temperatures</h1>
 
       <label className="field">
         Smoke ID
@@ -74,29 +125,54 @@ export default function App() {
         />
       </label>
 
-      <button type="button" onClick={loadLatest} disabled={loading}>
-        {loading ? "Loading…" : "Refresh"}
-      </button>
+      <p className="subtle meta">
+        {smokeId.trim()
+          ? loading
+            ? "Loading…"
+            : "Auto-refresh every 10s."
+          : "Enter a smoke ID to load data."}
+      </p>
 
       {err ? <p className="error">{err}</p> : null}
 
-      {result ? (
-        <dl className="reading">
-          <dt>Timestamp</dt>
-          <dd>{result.timestamp}</dd>
-          <dt>Internal</dt>
-          <dd>{result.internal?.toFixed?.(1) ?? result.internal}</dd>
-          <dt>Ambient</dt>
-          <dd>{result.ambient?.toFixed?.(1) ?? result.ambient}</dd>
-        </dl>
-      ) : null}
+      <section className="panel">
+        <h2 className="panel-title">Current</h2>
+        {cur ? (
+          <dl className="reading compact">
+            <dt>Timestamp</dt>
+            <dd>{cur.timestamp}</dd>
+            <dt>Internal</dt>
+            <dd>{cur.internal?.toFixed?.(1) ?? cur.internal}</dd>
+            <dt>Ambient</dt>
+            <dd>{cur.ambient?.toFixed?.(1) ?? cur.ambient}</dd>
+          </dl>
+        ) : (
+          <p className="muted">
+            {smokeId.trim() ? "No readings yet for this ID." : "—"}
+          </p>
+        )}
+      </section>
 
-      <p className="warn subtle">
-        Override URLs in Amplify with{" "}
-        <code>VITE_TELEMETRY_API_URL</code>,{" "}
-        <code>VITE_READ_ENDPOINT_URL</code>,{" "}
-        <code>VITE_WRITE_ENDPOINT_URL</code>.
-      </p>
+      <section className="panel plot-panel">
+        <h2 className="panel-title">History</h2>
+        {!smokeId.trim() ? (
+          <p className="muted">—</p>
+        ) : payload.history.length === 0 && !loading ? (
+          <p className="muted">No history to plot.</p>
+        ) : (
+          <Suspense
+            fallback={<p className="muted">Loading chart…</p>}
+          >
+            <Plot
+              data={plotData.data}
+              layout={plotData.layout}
+              config={{ responsive: true }}
+              style={{ width: "100%", minHeight: "380px" }}
+              useResizeHandler
+            />
+          </Suspense>
+        )}
+      </section>
     </div>
   );
 }
