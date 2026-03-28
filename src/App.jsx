@@ -1,6 +1,9 @@
 import { useCallback, useState } from "react";
-
-const apiBase = import.meta.env.VITE_TELEMETRY_API_URL?.replace(/\/$/, "") ?? "";
+import {
+  readEndpointUrl,
+  telemetryApiBaseUrl,
+  writeEndpointUrl,
+} from "./endpoints.js";
 
 function parseBody(res, text) {
   try {
@@ -19,16 +22,9 @@ export default function App() {
   const loadLatest = useCallback(async () => {
     setErr(null);
     setResult(null);
-    if (!apiBase) {
-      setErr(
-        "Set VITE_TELEMETRY_API_URL to your API URL (e.g. https://abc.execute-api.region.amazonaws.com).",
-      );
-      return;
-    }
     setLoading(true);
     try {
-      const url = new URL(`${apiBase}/telemetry`);
-      url.searchParams.set("type", "read");
+      const url = new URL(readEndpointUrl);
       url.searchParams.set("smoke_id", smokeId.trim() || "smoke-01");
       const res = await fetch(url.toString());
       const text = await res.text();
@@ -52,6 +48,21 @@ export default function App() {
         Data comes from your telemetry API (reads the most recent row for this{" "}
         <code>smoke_id</code>).
       </p>
+
+      <dl className="endpoints">
+        <dt>API base</dt>
+        <dd>
+          <code>{telemetryApiBaseUrl}</code>
+        </dd>
+        <dt>Read</dt>
+        <dd>
+          <code>{readEndpointUrl}</code>
+        </dd>
+        <dt>Write</dt>
+        <dd>
+          <code>{writeEndpointUrl}</code> <span className="muted">(notify.py)</span>
+        </dd>
+      </dl>
 
       <label className="field">
         Smoke ID
@@ -80,13 +91,12 @@ export default function App() {
         </dl>
       ) : null}
 
-      {!apiBase ? (
-        <p className="warn">
-          For Amplify: add environment variable{" "}
-          <code>VITE_TELEMETRY_API_URL</code> with the value from CDK output{" "}
-          <code>TelemetryApiUrl</code> (no trailing slash).
-        </p>
-      ) : null}
+      <p className="warn subtle">
+        Override URLs in Amplify with{" "}
+        <code>VITE_TELEMETRY_API_URL</code>,{" "}
+        <code>VITE_READ_ENDPOINT_URL</code>,{" "}
+        <code>VITE_WRITE_ENDPOINT_URL</code>.
+      </p>
     </div>
   );
 }

@@ -1,6 +1,7 @@
-"""Lambda: write smoke readings or read the latest reading per smoke_id."""
+"""Lambda: POST /write to save a reading; GET|POST /read for latest reading per smoke_id."""
 
 import json
+import logging
 import os
 from decimal import Decimal
 from typing import Any
@@ -8,6 +9,9 @@ from typing import Any
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 _TABLE = None
 
@@ -30,6 +34,26 @@ def _table():
     if _TABLE is None:
         _TABLE = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
     return _TABLE
+
+
+def _http_meta(
+    event: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """Returns (http_method, path) from an API Gateway HTTP API v2 event, if present."""
+    ctx = event.get("requestContext") or {}
+    http = ctx.get("http") or {}
+    method = (http.get("method") or "").upper() or None
+    path = event.get("rawPath") or http.get("path") or None
+    return method, path
+
+
+def _path_operation(path: str | None) -> str | None:
+    if not path:
+        return None
+    segment = path.rstrip("/").rsplit("/", 1)[-1]
+    if segment in ("write", "read"):
+        return segment
+    return None
 
 
 def _payload_from_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -58,6 +82,7 @@ def handle_write(body: dict[str, Any]) -> dict[str, Any]:
     required = ("timestamp", "smoke_id", "internal", "ambient")
     missing = [k for k in required if k not in body]
     if missing:
+        logger.warning("write rejected: missing fields %s", missing)
         return api_response(400, {"error": "Missing fields", "missing": missing})
 
     item = {
@@ -71,6 +96,11 @@ def handle_write(body: dict[str, Any]) -> dict[str, Any]:
         _table().put_item(Item=item)
     except ClientError as exc:
         err = exc.response.get("Error", {})
+        logger.exception(
+            "DynamoDB put_item failed smoke_id=%s timestamp=%s",
+            item["smoke_id"],
+            item["timestamp"],
+        )
         return api_response(
             500,
             {
@@ -79,11 +109,19 @@ def handle_write(body: dict[str, Any]) -> dict[str, Any]:
             },
         )
 
+    logger.info(
+        "write ok smoke_id=%s timestamp=%s internal=%s ambient=%s",
+        item["smoke_id"],
+        item["timestamp"],
+        item["internal"],
+        item["ambient"],
+    )
     return api_response(200, {"ok": True})
 
 
 def handle_read(body: dict[str, Any]) -> dict[str, Any]:
     if "smoke_id" not in body:
+        logger.warning("read rejected: missing smoke_id")
         return api_response(400, {"error": "read requires smoke_id"})
 
     smoke_id = str(body["smoke_id"])
@@ -95,6 +133,7 @@ def handle_read(body: dict[str, Any]) -> dict[str, Any]:
         )
     except ClientError as exc:
         err = exc.response.get("Error", {})
+        logger.exception("DynamoDB query failed smoke_id=%s", smoke_id)
         return api_response(
             500,
             {
@@ -105,26 +144,71 @@ def handle_read(body: dict[str, Any]) -> dict[str, Any]:
 
     items = resp.get("Items") or []
     if not items:
+        logger.info("read miss smoke_id=%s", smoke_id)
         return api_response(404, {"error": "No readings for smoke_id", "smoke_id": smoke_id})
 
-    return api_response(200, {"reading": _item_to_json(items[0])})
+    reading = _item_to_json(items[0])
+    logger.info(
+        "read hit smoke_id=%s timestamp=%s",
+        reading["smoke_id"],
+        reading["timestamp"],
+    )
+    return api_response(200, {"reading": reading})
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    request_id = getattr(context, "aws_request_id", None) if context else None
+    method, path = _http_meta(event)
+    op = _path_operation(path)
+
+    logger.info(
+        "invoke request_id=%s method=%s path=%s route=%s",
+        request_id,
+        method,
+        path,
+        op or "legacy-or-unknown",
+    )
+
     try:
         body = _payload_from_event(event)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        logger.warning("invalid JSON body: %s", exc)
         return api_response(400, {"error": "Invalid JSON body"})
 
-    op = body.get("type")
     if op == "write":
+        if method and method != "POST":
+            logger.warning("write wrong method=%s", method)
+            return api_response(
+                405,
+                {"error": "Method Not Allowed", "detail": "Use POST /write"},
+            )
         return handle_write(body)
+
     if op == "read":
+        if method and method not in ("GET", "POST"):
+            logger.warning("read wrong method=%s", method)
+            return api_response(
+                405,
+                {"error": "Method Not Allowed", "detail": "Use GET or POST /read"},
+            )
         return handle_read(body)
 
+    legacy = body.get("type")
+    if legacy == "write":
+        logger.info("legacy type=write")
+        return handle_write(body)
+    if legacy == "read":
+        logger.info("legacy type=read")
+        return handle_read(body)
+
+    logger.warning("unknown route path=%s keys=%s", path, list(body.keys())[:10])
     return api_response(
         400,
-        {"error": 'type must be "write" or "read"', "got": op},
+        {
+            "error": "Unknown route",
+            "detail": "Use POST /write or GET|POST /read (or legacy body type write|read)",
+            "path": path,
+        },
     )
 
 

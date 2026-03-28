@@ -1,4 +1,4 @@
-from aws_cdk import CfnOutput, Duration, Stack
+from aws_cdk import CfnOutput, Duration, Fn, Stack
 from aws_cdk import aws_apigatewayv2 as apigwv2
 from aws_cdk import aws_apigatewayv2_integrations as apigwv2_integrations
 from aws_cdk import aws_dynamodb as dynamodb
@@ -51,19 +51,41 @@ class SmokeReadingsStack(Stack):
             ),
         )
 
-        integration = apigwv2_integrations.HttpLambdaIntegration(
-            "TelemetryIntegration",
+        write_integration = apigwv2_integrations.HttpLambdaIntegration(
+            "WriteIntegration",
+            fn,
+        )
+        read_integration = apigwv2_integrations.HttpLambdaIntegration(
+            "ReadIntegration",
             fn,
         )
         http_api.add_routes(
-            path="/telemetry",
+            path="/write",
+            methods=[apigwv2.HttpMethod.POST],
+            integration=write_integration,
+        )
+        http_api.add_routes(
+            path="/read",
             methods=[apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
-            integration=integration,
+            integration=read_integration,
         )
 
         self.table = table
         self.telemetry_function = fn
         self.http_api = http_api
 
-        CfnOutput(self, "TelemetryApiUrl", value=http_api.api_endpoint)
+        base = http_api.api_endpoint
+        CfnOutput(self, "TelemetryApiBaseUrl", value=base, description="API root (no trailing slash)")
+        CfnOutput(
+            self,
+            "WriteEndpointUrl",
+            value=Fn.join("", [base, "/write"]),
+            description="POST JSON: timestamp, smoke_id, internal, ambient",
+        )
+        CfnOutput(
+            self,
+            "ReadEndpointUrl",
+            value=Fn.join("", [base, "/read"]),
+            description="GET ?smoke_id=... or POST JSON { smoke_id }",
+        )
         CfnOutput(self, "ReadingsTableName", value=table.table_name)
