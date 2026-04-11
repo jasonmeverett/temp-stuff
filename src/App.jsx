@@ -27,7 +27,7 @@ function normalizeReadPayload(data) {
 }
 
 export default function App() {
-  const [smokeId, setSmokeId] = useState("smoke-01");
+  const [smokeId, setSmokeId] = useState("pbdp");
   const [loading, setLoading] = useState(false);
   const [payload, setPayload] = useState({ current: null, history: [] });
   const [err, setErr] = useState(null);
@@ -117,12 +117,12 @@ export default function App() {
 
       <label className="field">
         Smoke ID
-        <input
-          value={smokeId}
-          onChange={(e) => setSmokeId(e.target.value)}
-          placeholder="smoke-01"
-          autoComplete="off"
-        />
+        <select value={smokeId} onChange={(e) => setSmokeId(e.target.value)}>
+          <option value="pbdp">pbdp</option>
+          <option value="pbtb-01">pbtb-01</option>
+          <option value="chk-01">chk-01</option>
+          <option value="chk-02">chk-02</option>
+        </select>
       </label>
 
       <p className="subtle meta">
