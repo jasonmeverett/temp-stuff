@@ -48,7 +48,11 @@ def _post_write(internal: float, ambient: float) -> None:
         print(f"Telemetry write failed: {e.reason}")
 
 
+_notify_count = 0
+
+
 def handle(sender, data):
+    global _notify_count
     parsed = parse(data)
     if not parsed:
         return
@@ -62,7 +66,9 @@ def handle(sender, data):
         f"Ambient: {parsed['ambient_f']:.1f}°F "
         f"({parsed['ambient_c']:.1f}°C)"
     )
-    _post_write(parsed["internal_f"], parsed["ambient_f"])
+    _notify_count += 1
+    if _notify_count % 2 == 0:
+        _post_write(parsed["internal_f"], parsed["ambient_f"])
 
 
 async def run():
