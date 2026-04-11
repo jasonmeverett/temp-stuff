@@ -7,34 +7,17 @@ from urllib.request import Request, urlopen
 
 from bleak import BleakClient
 
-ADDRESS = "AF449CB0-DAF6-5FA8-5A34-3BF49E6213AE"
+from probe_decode import decode_mode_label, format_raw_line, parse
+
+ADDRESS = "6E00D83A-7480-3FCF-D7C5-7D89FBDD8974"
+# Same family as e.g. ff01/ff02/ff03 custom chars (see ble_ctf_infinity-style layouts).
 NOTIFY_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
 
-CALIBRATION_OFFSET = 2.5  # adjust if needed
-
-# Set after deploy from CDK output WriteEndpointUrl (full URL ending in /write)
-# TELEMETRY_WRITE_URL = os.environ.get("TELEMETRY_WRITE_URL", "").strip()
-TELEMETRY_WRITE_URL = "https://jm4k4rx1r2.execute-api.us-east-1.amazonaws.com/write"
-SMOKE_ID = os.environ.get("SMOKE_ID", "smoke-01").strip() or "smoke-01"
-
-
-def parse(data):
-    if len(data) != 8:
-        return None
-
-    b = int.from_bytes(data[2:4], "little")
-    c = int.from_bytes(data[4:6], "little")
-
-    # FIXED mapping
-    internal_c = (b / 2) - CALIBRATION_OFFSET
-    ambient_c = c / 100
-
-    return {
-        "internal_c": internal_c,
-        "internal_f": internal_c * 9 / 5 + 32,
-        "ambient_c": ambient_c,
-        "ambient_f": ambient_c * 9 / 5 + 32,
-    }
+TELEMETRY_WRITE_URL = os.environ.get(
+    "TELEMETRY_WRITE_URL",
+    "https://jm4k4rx1r2.execute-api.us-east-1.amazonaws.com/write",
+).strip()
+SMOKE_ID = os.environ.get("SMOKE_ID", "pbdp").strip() or "smoke-01"
 
 
 def _post_write(internal: float, ambient: float) -> None:
@@ -70,6 +53,9 @@ def handle(sender, data):
     if not parsed:
         return
 
+    if not os.environ.get("NOTIFY_QUIET_RAW"):
+        print(format_raw_line(bytes(data)))
+
     print(
         f"Internal: {parsed['internal_f']:.1f}°F "
         f"({parsed['internal_c']:.1f}°C) | "
@@ -82,6 +68,8 @@ def handle(sender, data):
 async def run():
     async with BleakClient(ADDRESS) as client:
         print("Connected:", client.is_connected)
+        print(f"Decode: {decode_mode_label()}")
+        print("NOTIFY_PARSE=legacy restores old °C-tenths guess; NOTIFY_QUIET_RAW=1 hides RAW line.")
 
         await client.start_notify(NOTIFY_UUID, handle)
 

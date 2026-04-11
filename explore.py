@@ -1,7 +1,7 @@
 import asyncio
 from bleak import BleakClient
 
-ADDRESS = "AF449CB0-DAF6-5FA8-5A34-3BF49E6213AE"
+ADDRESS = "6E00D83A-7480-3FCF-D7C5-7D89FBDD8974"
 
 async def explore():
     async with BleakClient(ADDRESS) as client:
