@@ -121,6 +121,7 @@ export default function App() {
           <option value="pbdp">pbdp</option>
           <option value="pbtb-01">pbtb-01</option>
           <option value="chk-01">chk-01</option>
+          <option value="chk-04">chk-04</option>
         </select>
       </label>
 
