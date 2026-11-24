@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>ThermoPro TP920</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/plotly.min.js" defer></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="#live">ThermoPro <strong>TP920</strong></a>
+        <nav class="tabs" role="tablist" aria-label="Thermometer dashboard">
+          <button id="live-tab" type="button" role="tab" aria-controls="live" aria-selected="true">Live readings</button>
+          <button id="decoding-tab" type="button" role="tab" aria-controls="decoding" aria-selected="false" tabindex="-1">Bluetooth decoding</button>
+        </nav>
+        <div id="status" class="status" data-tone="idle" role="status">
+          <span id="status-text">Connecting dashboard</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section id="live" role="tabpanel" aria-labelledby="live-tab">
+        <div class="page-heading">
+          <h1>Probe temperatures</h1>
+          <p>Recorded to SQLite every 10 seconds.</p>
+        </div>
+
+        <div class="probe-grid">
+          <article class="card probe" data-probe="1">
+            <h2>Probe 1</h2>
+            <div class="temperature"><output id="probe-1-value">—</output><span id="probe-1-unit" hidden>°F</span></div>
+            <p id="probe-1-detail">Waiting for a sample</p>
+          </article>
+          <article class="card probe" data-probe="2">
+            <h2>Probe 2</h2>
+            <div class="temperature"><output id="probe-2-value">—</output><span id="probe-2-unit" hidden>°F</span></div>
+            <p id="probe-2-detail">Waiting for a sample</p>
+          </article>
+        </div>
+
+        <section class="card chart-card" aria-labelledby="chart-title">
+          <div class="chart-heading">
+            <div>
+              <h2 id="chart-title">Temperature history</h2>
+              <p>Last 24 hours</p>
+            </div>
+            <div class="sample-time">
+              <span>Last sample</span>
+              <time id="sample-time">—</time>
+            </div>
+          </div>
+          <div class="plot-container">
+            <div id="plot" role="region" aria-label="Interactive Plotly chart of both probe temperatures in Fahrenheit"></div>
+            <p id="plot-message" class="plot-message">Loading chart…</p>
+          </div>
+        </section>
+      </section>
+
+      <section id="decoding" role="tabpanel" aria-labelledby="decoding-tab" hidden>
+        <div class="page-heading">
+          <h1>How the TP920 was decoded</h1>
+        </div>
+
+        <section class="card protocol">
+          <h2>Finding the stream</h2>
+          <p>The Mac’s Bluetooth LE scan found <code>TP920</code> advertising service <code>1086fff0-3343-4817-8bb2-b32206336ce8</code>. Connecting revealed the <code>FFF1</code> command characteristic and the <code>FFF2</code> notification characteristic.</p>
+          <p>I subscribed to <code>FFF2</code> and initially received zero measurements. I then sent the startup command <code>01 09 8a 7a 13 b7 3e d6 8b 67 c2 a0</code> to <code>FFF1</code> and received <code>0x30</code> measurement packets. The command came from a community capture for the same ThermoPro service. <a href="https://community.home-assistant.io/t/thermopro-meat-thermometer-tp904-gateway/979618" target="_blank" rel="noopener">Community capture</a></p>
+          <p>The startup packet begins with the command type <code>01</code> and payload length <code>09</code>. The final <code>a0</code> is the low byte of the sum of all preceding bytes. The meaning of the nine payload bytes is still unknown.</p>
+        </section>
+
+        <section class="card protocol">
+          <h2>Reading the bytes</h2>
+          <p>This example packet uses a synthetic temperature. The first byte, <code>30</code>, identifies a temperature report. The next byte, <code>0f</code>, says the payload is 15 bytes long. I verified the checksum and probe offsets on live TP920 notifications. Byte numbering starts at zero. <a href="https://martys.blog/posts/thermopro-3-raw-data" target="_blank" rel="noopener">ThermoPro packet analysis</a></p>
+          <div class="packet" aria-label="Example temperature packet">
+            <code>30 0f 64 0f 00</code>
+            <code class="bytes-one">ff ff</code>
+            <code class="bytes-two">02 35</code>
+            <code>ff ff ff ff ff ff ff ff</code>
+            <code class="checksum">df</code>
+          </div>
+          <dl class="byte-legend">
+            <div>
+              <dt class="bytes-one">Probe 1 · bytes 5–6</dt>
+              <dd><code>ff ff</code> means the probe returned no reading.</dd>
+            </div>
+            <div>
+              <dt class="bytes-two">Probe 2 · bytes 7–8</dt>
+              <dd>Each hex digit represents a decimal digit. <code>02 35</code> is 235 tenths of a degree, or <strong>23.5°C (74.3°F)</strong>.</dd>
+            </div>
+            <div>
+              <dt class="checksum">Checksum · byte 17</dt>
+              <dd>The low byte of the sum of the preceding bytes is <code>df</code>.</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="card protocol">
+          <h2>From packet to chart</h2>
+          <p>Every 10 seconds, the recorder saves the freshest validated packet to SQLite. The dashboard receives the committed row and plots both probes. Missing or unrecognized values appear as gaps. The chart shows the last 24 hours, and SQLite retains the full log.</p>
+          <dl class="latest-packet">
+            <dt>Latest recorded packet</dt>
+            <dd><output id="latest-packet">Waiting for a valid packet</output></dd>
+          </dl>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>
